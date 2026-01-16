@@ -1,13 +1,32 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { Bonjour } from 'bonjour-service';
+import os from 'os';
 
 const PORT = Number(process.env.CLIP_SYNC_PORT || process.env.PORT || 8080);
+const HOST = process.env.CLIP_SYNC_HOST || '0.0.0.0';
 const SERVICE_NAME = 'Clipboard Hub';
 const SERVICE_TYPE = 'clip-sync';
 
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ port: PORT, host: HOST });
 
-console.log(`Clipboard Hub running on port ${PORT}...`);
+const getLocalIPv4Addresses = () => {
+    const ifaces = os.networkInterfaces();
+    const addrs = [];
+    for (const infos of Object.values(ifaces)) {
+        for (const info of infos || []) {
+            if (info.family === 'IPv4' && !info.internal) {
+                addrs.push(info.address);
+            }
+        }
+    }
+    return [...new Set(addrs)];
+};
+
+console.log(`Clipboard Hub running on ws://${HOST}:${PORT}`);
+const localIps = getLocalIPv4Addresses();
+if (localIps.length) {
+    console.log('Local IPv4 addresses:', localIps.join(', '));
+}
 
 const bonjourService = new Bonjour();
 const advertisement = bonjourService.publish({

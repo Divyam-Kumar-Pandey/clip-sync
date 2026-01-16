@@ -1,12 +1,17 @@
 import WebSocket from 'ws';
 import clipboard from 'clipboardy';
 import { Bonjour } from 'bonjour-service';
+import os from 'os';
+import net from 'net';
 
 const SERVICE_TYPE = process.env.CLIP_SYNC_SERVICE_TYPE || 'clip-sync';
 const DISCOVERY_TIMEOUT_MS = Number(process.env.CLIP_SYNC_DISCOVERY_TIMEOUT_MS || 7000);
 const DEFAULT_PORT = Number(process.env.CLIP_SYNC_PORT || 8080);
 const DISCOVERY_FALLBACK_URL = `ws://localhost:${DEFAULT_PORT}`;
 const ENV_SERVER_URL = process.env.CLIP_SYNC_SERVER_URL;
+const ENABLE_SUBNET_SCAN = process.env.CLIP_SYNC_ENABLE_SCAN !== '0';
+const SCAN_CONNECT_TIMEOUT_MS = Number(process.env.CLIP_SYNC_SCAN_CONNECT_TIMEOUT_MS || 350);
+const SCAN_MAX_HOSTS = Number(process.env.CLIP_SYNC_SCAN_MAX_HOSTS || 512);
 
 let lastLocalContent = '';
 let lastRemoteContent = '';
@@ -47,6 +52,96 @@ const toWsUrl = (address, port) => {
         return `ws://[${address}]:${port}`;
     }
     return `ws://${address}:${port}`;
+};
+
+const ipToInt = (ip) => ip.split('.').reduce((acc, octet) => ((acc << 8) | (Number(octet) & 255)) >>> 0, 0);
+const intToIp = (num) => [num >>> 24, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
+
+const enumerateSubnetHosts = (address, netmask) => {
+    const addrInt = ipToInt(address);
+    const maskInt = ipToInt(netmask);
+    const network = addrInt & maskInt;
+    const broadcast = (network | (~maskInt >>> 0)) >>> 0;
+    const hostCount = Math.max(0, broadcast - network - 1);
+
+    if (hostCount > SCAN_MAX_HOSTS) {
+        return [];
+    }
+
+    const hosts = [];
+    for (let i = network + 1; i < broadcast; i++) {
+        hosts.push(intToIp(i >>> 0));
+    }
+    return hosts;
+};
+
+const getLocalIPv4Interfaces = () => {
+    const ifaces = os.networkInterfaces();
+    const results = [];
+    for (const infos of Object.values(ifaces)) {
+        for (const info of infos || []) {
+            if (info.family === 'IPv4' && !info.internal && info.address && info.netmask) {
+                results.push({ address: info.address, netmask: info.netmask });
+            }
+        }
+    }
+    return results;
+};
+
+const probeTcpPortOpen = (host, port, timeoutMs) => {
+    return new Promise((resolve) => {
+        const socket = net.connect({ host, port });
+        let settled = false;
+
+        const done = (value) => {
+            if (settled) return;
+            settled = true;
+            socket.destroy();
+            resolve(value);
+        };
+
+        socket.setTimeout(timeoutMs, () => done(false));
+        socket.once('connect', () => done(true));
+        socket.once('error', () => done(false));
+    });
+};
+
+const scanLocalNetworkForHub = async () => {
+    const candidates = new Set();
+    const localIfaces = getLocalIPv4Interfaces();
+
+    for (const iface of localIfaces) {
+        for (const ip of enumerateSubnetHosts(iface.address, iface.netmask)) {
+            if (ip !== iface.address) {
+                candidates.add(ip);
+            }
+        }
+    }
+
+    const ips = [...candidates];
+    if (!ips.length) {
+        return null;
+    }
+
+    console.log(`Subnet scan enabled: probing up to ${ips.length} hosts on port ${DEFAULT_PORT}...`);
+
+    const concurrency = 80;
+    let index = 0;
+    let found = null;
+
+    const worker = async () => {
+        while (index < ips.length && !found) {
+            const ip = ips[index++];
+            const open = await probeTcpPortOpen(ip, DEFAULT_PORT, SCAN_CONNECT_TIMEOUT_MS);
+            if (open) {
+                found = ip;
+                return;
+            }
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, ips.length) }, worker));
+    return found;
 };
 
 const discoverClipboardHub = (timeoutMs = DISCOVERY_TIMEOUT_MS) => {
@@ -136,7 +231,17 @@ const resolveWebSocketUrl = async () => {
         console.log(`Discovered Clipboard Hub at ${service.address}:${service.port}`);
         return toWsUrl(service.address, service.port);
     } catch (err) {
-        console.warn('Clipboard hub discovery failed — falling back to localhost:', err.message);
+        console.warn('Clipboard hub discovery failed:', err.message);
+
+        if (ENABLE_SUBNET_SCAN) {
+            const ip = await scanLocalNetworkForHub();
+            if (ip) {
+                console.log(`Subnet scan found a candidate at ${ip}:${DEFAULT_PORT}`);
+                return toWsUrl(ip, DEFAULT_PORT);
+            }
+        }
+
+        console.warn('Falling back to localhost.');
         return DISCOVERY_FALLBACK_URL;
     }
 };
