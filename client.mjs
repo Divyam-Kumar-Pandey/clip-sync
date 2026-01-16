@@ -1,8 +1,8 @@
-const WebSocket = require('ws');
-const clipboardy = require('clipboardy');
+import WebSocket from 'ws';
+import clipboard from 'clipboardy';
 
 // Replace 'localhost' with your server's IP address if running on different machines
-const ws = new WebSocket('ws://localhost:8080');
+const ws = new WebSocket('ws://192.168.1.5:8080');
 
 let lastLocalContent = '';
 let lastRemoteContent = '';
@@ -12,11 +12,12 @@ ws.on('open', async () => {
     
     // Initialize with current clipboard content so we don't send old data immediately
     try {
-        lastLocalContent = await clipboardy.read();
+        lastLocalContent = await clipboard.read();
     } catch (e) {
         console.log("Clipboard empty or unreadable");
+        console.error("Initial clipboard read error:", e);
     }
-
+    console.log('reached here');
     // Start watching the clipboard
     setInterval(checkClipboard, 1000);
 });
@@ -30,7 +31,7 @@ ws.on('message', async (data) => {
 
     // 2. Write to the actual OS clipboard
     try {
-        await clipboardy.write(text);
+        await clipboard.write(text);
         console.log('📋 Received & Synced:', text);
     } catch (err) {
         console.error('Failed to write to clipboard:', err);
@@ -48,7 +49,7 @@ ws.on('error', (err) => {
 
 async function checkClipboard() {
     try {
-        const currentContent = await clipboardy.read();
+        const currentContent = await clipboard.read();
 
         // If clipboard has changed...
         if (currentContent !== lastLocalContent) {
@@ -64,5 +65,6 @@ async function checkClipboard() {
         }
     } catch (err) {
         // Usually happens if clipboard is empty or contains non-text (image)
+        console.error("Error while polling clipboard:", err);
     }
 }
