@@ -17,7 +17,6 @@ ws.on('open', async () => {
         console.log("Clipboard empty or unreadable");
         console.error("Initial clipboard read error:", e);
     }
-    console.log('reached here');
     // Start watching the clipboard
     setInterval(checkClipboard, 1000);
 });
