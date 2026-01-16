@@ -73,7 +73,8 @@ const enumerate24Hosts = (address) => {
 const enumerateSubnetHosts = (address, netmask) => {
     const addrInt = ipToInt(address);
     const maskInt = ipToInt(netmask);
-    const network = addrInt & maskInt;
+    // Important: bitwise ops yield signed int32; convert to uint32 to avoid negative math on 192.x.x.x ranges.
+    const network = (addrInt & maskInt) >>> 0;
     const broadcast = (network | (~maskInt >>> 0)) >>> 0;
     const hostCount = Math.max(0, broadcast - network - 1);
 
