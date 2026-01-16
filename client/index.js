@@ -57,6 +57,19 @@ const toWsUrl = (address, port) => {
 const ipToInt = (ip) => ip.split('.').reduce((acc, octet) => ((acc << 8) | (Number(octet) & 255)) >>> 0, 0);
 const intToIp = (num) => [num >>> 24, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
 
+const enumerate24Hosts = (address) => {
+    const parts = String(address).split('.');
+    if (parts.length !== 4) {
+        return [];
+    }
+    const prefix = parts.slice(0, 3).join('.');
+    const hosts = [];
+    for (let i = 1; i <= 254; i++) {
+        hosts.push(`${prefix}.${i}`);
+    }
+    return hosts;
+};
+
 const enumerateSubnetHosts = (address, netmask) => {
     const addrInt = ipToInt(address);
     const maskInt = ipToInt(netmask);
@@ -65,7 +78,12 @@ const enumerateSubnetHosts = (address, netmask) => {
     const hostCount = Math.max(0, broadcast - network - 1);
 
     if (hostCount > SCAN_MAX_HOSTS) {
-        return [];
+        // Some networks are /16 or larger; scanning them fully is too slow.
+        // Fall back to scanning a /24 around the host IP, which is usually enough on home Wi‑Fi.
+        console.log(
+            `Subnet too large to scan safely (${hostCount} hosts, netmask ${netmask}). Falling back to /24 scan around ${address}.`
+        );
+        return enumerate24Hosts(address);
     }
 
     const hosts = [];
@@ -120,6 +138,7 @@ const scanLocalNetworkForHub = async () => {
 
     const ips = [...candidates];
     if (!ips.length) {
+        console.log('Subnet scan enabled, but no candidate IPs were found from local interfaces.');
         return null;
     }
 
@@ -299,7 +318,7 @@ const startClipboardSync = async () => {
     });
 
     ws.on('error', (err) => {
-        console.error('Connection error:', err.message);
+        console.error('Connection error:', err?.message || String(err));
     });
 };
 
